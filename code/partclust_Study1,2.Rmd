@@ -1,0 +1,226 @@
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(WVPlots)
+library(clue)
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(readr)
+library(lavaan)
+library(ggplot2)
+library(ggExtra)
+library(broom)
+library(cowplot)
+library(stringr)
+library(ggpubr)
+library(car)
+theme_set(theme_cowplot())
+library(corrplot)
+library(visreg)
+library(ggcorrplot)
+library(ggseg3d)
+library(ggseg)
+library(ggsegSchaefer)
+library(psych)
+library(nlme)
+library(mgcv)
+library(gratia)
+library(patchwork) 
+library(broom)
+library(ggsegYeo2011)
+```
+
+```{r setup, include=FALSE} 
+yeo_colors <- c(
+    "Cont"     = "#d48b28",
+    "Default"  = "#b73a48",
+    "Limbic"   = "#d0e09f",
+    "Visual"   = "#672074",
+    "DorsAttn" = "#146e38",
+    "VentAttn" = "#7e4c93",
+    "SomMot"   = "#4377a3",
+    "Other"    = "grey70"
+  )
+```
+
+```{r setup, include=FALSE} 
+age_H <- read.csv('../dataset/Study1/study1_part_clust_play.csv')
+age_H <- age_H[!duplicated(age_H), ]
+```
+
+```{r setup, include=FALSE} 
+# Study1
+for (typ in c('clust')){
+  schaefer_H <- data.frame(age=1:400)
+  pvalue <- data.frame(age=1:400)
+  part_cols <- grep(typ, colnames(age_H), value = TRUE)
+  n <- 1 #
+  for (col in part_cols) {
+    gam.model <- gam(age_H[[col]] ~ mFD + sex + scan_age + s(sub_id, bs = "re"), data = age_H) 
+    schaefer_H$age[n] <- summary(gam.model)$p.table['scan_age', "Estimate"] #imitation_play_percentile +
+    pvalue$age[n] <- summary(gam.model)$p.table['scan_age', "Pr(>|t|)"] #imitation_play_percentile
+    n <- n+1
+  }
+  schaefer_H[['SArank']] <- human_sa
+  model <- gam(schaefer_H[['age']] ~ s(SArank, k=3), data = schaefer_H)
+  print(summary(model))
+  pred <- predict(model, se.fit=T)
+  ggplot(data = schaefer_H, mapping = aes(x = SArank, y = age)) +
+    geom_point(aes(color = schaefer_H[['SArank']])) + 
+    geom_ribbon(aes(ymin=pred$fit-1.96*pred$se.fit,
+                     ymax=pred$fit+1.96*pred$se.fit), alpha = 1, fill = 'gray') +
+    geom_smooth(method="gam", formula= y~s(x, k=3)) + scale_color_gradient(low='yellow', high='purple') + theme(
+      axis.text.x = element_text(size = 20),  # Increase x-tick font size
+      axis.text.y = element_text(size = 20),   # Increase y-tick font size
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      legend.position='none')
+  ggsave(file=paste0(typ, 'BCP_SA.eps'), device='pdf', width=6, height=4, dpi=300)
+  schaefer_H <- cbind(schaefer_H, label400)
+  schaefer_H$pvalue <- pvalue$age
+  schaefer_H$p_adj <- p.adjust(schaefer_H$pvalue, method = "fdr")
+  schaefer_H <- schaefer_H %>%
+    mutate(yeo_label = str_split_fixed(region, "_", 2)[,1])
+  schaefer_H <- schaefer_H %>%
+    mutate(yeonetwork = case_when(
+      str_detect(yeo_label, "Cont")     ~ "Cont",
+      str_detect(yeo_label, "Default")  ~ "Default",
+      str_detect(yeo_label, "TempPar")  ~ "Default",  # same color as Default
+      str_detect(yeo_label, "Limbic")   ~ "Limbic",
+      str_detect(yeo_label, "Vis")      ~ "Visual",
+      str_detect(yeo_label, "DorsAttn") ~ "DorsAttn",
+      str_detect(yeo_label, "VentAttn") ~ "VentAttn",
+      str_detect(yeo_label, "SomMot")   ~ "SomMot",
+      TRUE                              ~ "Other"
+    ))
+  # Filter significant comparisons (p.adj < 0.05)
+  schaefer_H <- schaefer_H[schaefer_H$pvalue<0.05, ]
+  min_age <- -1e-4 #min(schaefer_H$age, na.rm = TRUE)
+  max_age <- 1e-4 #max(schaefer_H$age, na.rm = TRUE)
+  print(c(min(schaefer_H$age, na.rm = TRUE), max(schaefer_H$age, na.rm = TRUE)))
+  whole <- ggseg(schaefer_H, atlas = schaefer17_400, mapping = aes(fill = age), position = "stacked") +
+    scale_fill_gradientn(
+      colours = c('blue', 'white', 'red'), na.value = "gray80",
+      values = scales::rescale(c(min_age, 0, max_age)),   # white at zeroscales::rescale(
+      name = bquote(play_effect)
+    ) +
+    theme_brain(text.size = 16)
+  ggsave(file=paste0(typ, 'BCP_wholebrain.eps'), device='pdf', width=6, height=4, dpi=300)
+  signif_df <- schaefer_H %>%
+  group_by(yeonetwork) %>%
+  summarise(p_value = t.test(age)$p.value,
+            y_pos = 0) %>%
+  mutate(signif = case_when(
+    p_value < 0.001 ~ "***",
+    p_value < 0.01  ~ "**",
+    p_value < 0.05  ~ "*",
+    TRUE            ~ ""
+  ))
+  #schaefer_H$age <- scale(schaefer_H$age)
+  # Final plot stat_pvalue_manual(annot_df, label = "p.signif", tip.length = 0.01) +
+  p <- ggplot(schaefer_H, aes(x = yeonetwork, y = age, fill = yeonetwork)) +
+    geom_boxplot() +
+    scale_fill_manual(values = yeo_colors) +
+    labs(x = "Yeo Network", y = "Age Effect", title = "Age Effect by Yeo Network") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "none")
+  p <- p + geom_text(data = signif_df, aes(x = yeonetwork, y = y_pos, label = signif), inherit.aes = FALSE, size = 5)
+  # Save the plot
+  ggsave(file = paste0(typ, 'BCP_Yeo.eps'), plot = p, device = 'pdf',
+         width = 4, height = 4, dpi = 300)
+}
+anova_mod <- aov(age ~ yeonetwork, data = schaefer_H)
+summary(anova_mod)
+tuk <- TukeyHSD(anova_mod, "yeonetwork")
+print(tuk)
+tuk_df <- broom::tidy(tuk)
+tuk_df <- tuk_df[tuk_df$adj.p.value<0.05, ]
+```
+
+```{r setup, include=FALSE}
+age_H <- read.csv('../dataset/Study2/study2_part_clust_play.csv')
+age_H <- age_H %>% drop_na(litnum_play,fd_mean,male,age_ques,sub_id)
+age_H$sub_id <- as.factor(age_H$sub_id)
+```
+
+```{r setup, include=FALSE}
+# Study2
+for (typ in c('clust')){
+  schaefer_H <- data.frame(age=1:400)
+  pvalue <- data.frame(age=1:400)
+  part_cols <- grep(typ, colnames(age_H), value = TRUE)
+  n <- 1 #litnum_play + 
+  for (col in part_cols) {
+    gam.model <- gam(age_H[[col]] ~ fd_mean + male + age_ques, data = age_H) # litnum_play + 
+    schaefer_H$age[n] <- summary(gam.model)$p.table['age_ques', "Estimate"]
+    pvalue$age[n] <- summary(gam.model)$p.table['age_ques', "Pr(>|t|)"]
+    n <- n+1
+  }
+  schaefer_H[['SArank']] <- human_sa
+  model <- gam(schaefer_H[['age']] ~ s(SArank, k=3), data = schaefer_H)
+  print(summary(model))
+  pred <- predict(model, se.fit=T)
+  ggplot(data = schaefer_H, mapping = aes(x = SArank, y = age)) +
+    geom_point(aes(color = schaefer_H[['SArank']])) + 
+    geom_ribbon(aes(ymin=pred$fit-1.96*pred$se.fit,
+                     ymax=pred$fit+1.96*pred$se.fit), alpha = 1, fill = 'gray') +
+    geom_smooth(method="gam", formula= y~s(x, k=3)) + scale_color_gradient(low='yellow', high='purple') + theme(
+      axis.text.x = element_text(size = 20),  # Increase x-tick font size
+      axis.text.y = element_text(size = 20),   # Increase y-tick font size
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      legend.position='none')
+  ggsave(file=paste0(typ, 'CBPD_SA.eps'), device='pdf', width=6, height=4, dpi=300)
+  schaefer_H <- cbind(schaefer_H, label400)
+  schaefer_H$pvalue <- pvalue$age
+  schaefer_H <- schaefer_H[schaefer_H$pvalue<0.05, ]
+  schaefer_H$p_adj <- p.adjust(schaefer_H$pvalue, method = "fdr")
+  schaefer_H <- schaefer_H %>%
+    mutate(yeo_label = str_split_fixed(region, "_", 2)[,1])
+  schaefer_H <- schaefer_H %>%
+    mutate(yeonetwork = case_when(
+      str_detect(yeo_label, "Cont")     ~ "Cont",
+      str_detect(yeo_label, "Default")  ~ "Default",
+      str_detect(yeo_label, "TempPar")  ~ "Default",  # same color as Default
+      str_detect(yeo_label, "Limbic")   ~ "Limbic",
+      str_detect(yeo_label, "Vis")      ~ "Visual",
+      str_detect(yeo_label, "DorsAttn") ~ "DorsAttn",
+      str_detect(yeo_label, "VentAttn") ~ "VentAttn",
+      str_detect(yeo_label, "SomMot")   ~ "SomMot",
+      TRUE                              ~ "Other"
+    ))
+  min_age <- -1e-4 #min(schaefer_H$age, na.rm = TRUE)
+  max_age <- 1e-4
+  whole <- ggseg(schaefer_H, atlas = schaefer17_400, mapping = aes(fill = age), position = "stacked") + scale_fill_gradientn(colours=c('blue', 'white', "red"), values = scales::rescale(c(min_age, 0, max_age)), name = bquote(play_effect), na.value = "gray80") + theme_brain(text.size=16) 
+    ggsave(file=paste0(typ, 'CBPD_wholebrain.eps'), device='pdf', width=6, height=4, dpi=300)
+  signif_df <- schaefer_H %>%
+  group_by(yeonetwork) %>%
+  summarise(p_value = t.test(age)$p.value,
+            y_pos = -0.025) %>%
+  mutate(signif = case_when(
+    p_value < 0.001 ~ "***",
+    p_value < 0.01  ~ "**",
+    p_value < 0.05  ~ "*",
+    TRUE            ~ ""
+  ))
+  #schaefer_H$age <- scale(schaefer_H$age)
+  # Final plot stat_pvalue_manual(annot_df, label = "p.signif", tip.length = 0.01) +
+  p <- ggplot(schaefer_H, aes(x = yeonetwork, y = age, fill = yeonetwork)) +
+    geom_boxplot() + ylim(-0.05, 0) +
+    scale_fill_manual(values = yeo_colors) +
+    labs(x = "Yeo Network", y = "Age Effect", title = "Age Effect by Yeo Network") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "none")
+  p <- p + geom_text(data = signif_df, aes(x = yeonetwork, y = y_pos, label = signif), inherit.aes = FALSE, size = 5)
+  # Save the plot
+  ggsave(file = paste0(typ, 'CBPD_Yeo.eps'), plot = p, device = 'pdf',
+         width = 4, height = 4, dpi = 300)
+}
+anova_mod <- aov(age ~ yeonetwork, data = schaefer_H)
+summary(anova_mod)
+tuk <- TukeyHSD(anova_mod, "yeonetwork")
+print(tuk)
+tuk_df <- broom::tidy(tuk)
+tuk_df <- tuk_df[tuk_df$adj.p.value<0.05, ]
+```

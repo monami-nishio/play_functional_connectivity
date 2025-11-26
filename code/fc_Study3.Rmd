@@ -1,0 +1,161 @@
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(WVPlots)
+library(clue)
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(readr)
+library(lavaan)
+library(ggplot2)
+library(ggExtra)
+library(cowplot)
+library(car)
+theme_set(theme_cowplot())
+library(corrplot)
+library(visreg)
+library(ggcorrplot)
+library(ggseg3d)
+library(ggseg)
+library(ggsegSchaefer)
+library(psych)
+library(nlme)
+library(mgcv)
+library(gratia)
+library(patchwork) 
+library(broom)
+library(ggsegYeo2011)
+```
+
+```{r setup, include=FALSE}
+brainnetworks <- c('Default_Default',
+     'Default_Cont',
+     'Default_SalVentAttn',
+     'Cont_Cont',
+     'Cont_SalVentAttn',
+     'SalVentAttn_SalVentAttn')
+yeo_colors <- c("#b73a48","#d48b28","#146e38","#7e4c93","#d0e09f","#4377a3","#672074")
+```     
+
+```{r setup, include=FALSE}
+test <- read.csv('../dataset/Study3/study3_all_yeo7.csv')
+for (par in c('fluid_intelligence')){
+    test <- test[test$Pedagogy=='M', ]
+    test$target <- test[[par]]
+     test <- test %>% drop_na(target, Age, Gender, meanFD)
+    ymin <- 18
+    ymax <- 40
+    k <- 4
+    model <- gam(target ~ s(Age, k=k) + Gender + meanFD, data = test)
+    nullmodel <- gam(target ~ Gender + meanFD, data = test)
+    pvalue <- anova.gam(nullmodel, model, test='Chisq')$`Pr(>Chi)`[2]
+    sse.model <- sum((model$y - model$fitted.values)^2)
+    sse.nullmodel <- sum((nullmodel$y - nullmodel$fitted.values)^2)
+    partialRsq <- (sse.nullmodel - sse.model)/sse.nullmodel
+    print(c(partialRsq,pvalue))
+    derv <- derivatives(model, unconditional = FALSE, interval = "simultaneous")
+    increasing.range <- derv[['Age']][derv[['.lower_ci']] > 0][derv[['.upper_ci']] > 0]
+    if (length(increasing.range) > 0) {
+      print(max(increasing.range, na.rm=TRUE))
+    } else {
+      print("No increasing range found")
+    }
+    model <- gam(target ~ s(Age, k=k), data = test)
+    pred <- predict(model, se.fit = TRUE)
+    test$prediction <- pred$fit
+    test$lower_ci <- pred$fit - 1.96 * pred$se.fit
+    test$upper_ci <- pred$fit + 1.96 * pred$se.fit
+    p <- ggplot(data = test, aes(x = Age, y = target)) + 
+      geom_point(color = "black") +
+      ylim(ymin, ymax) + xlim(4, 12) +
+      geom_smooth(method = "gam", formula = y ~ s(x, k = k), se = TRUE, alpha = 1, level = 0.999) +
+      geom_vline(xintercept = ifelse(length(increasing.range) > 0, max(increasing.range, na.rm = TRUE), NA), linetype = "dashed") +
+      theme(legend.position = 'none')
+    ggsave(paste0(par,'.eps'), plot = p, 
+           width = 3.5, height = 4, units = 'in', dpi = 300)}
+```
+
+```{r setup, include=FALSE}
+r_sq <- c(2.57, 3.09, 2.94, 1.57, 2.38, 1.65) #controlling for SES
+stats_df <- tibble(
+        network = brainnetworks,
+        r_sq    = r_sq
+      )
+heatmap <- ggplot(stats_df,
+       aes(x = network, y = 1, fill = r_sq)) +
+  geom_tile() +
+  geom_text(aes(label = ifelse(sig, "*", "")), vjust = .5) +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", name = "r") +
+  theme_minimal(base_size = 12) +
+  theme(axis.title.y = element_blank(),
+        axis.text.y  = element_blank(),
+        panel.grid   = element_blank()) +
+  ggtitle("Partial correlation / association between BOLD network and behaviour")
+ggsave("heatmap_solange.eps", plot = heatmap,
+       width = 5, height = 5, dpi = 300)
+```
+
+```{r setup, include=FALSE}
+# Brain measure age effect 
+test <- read.csv('../dataset/Study3/study3_all_yeo7.csv')
+plot_list <- list()  # store ggplot objects here
+i <- 1
+edf <- partialRsq
+p_val <- pvalue
+results_table <- data.frame(
+  BrainNetwork = character(),
+  EDF = numeric(),
+  F_value = numeric(),
+  p_value = numeric(),
+  stringsAsFactors = FALSE
+)
+for (brain_par in brainnetworks) {
+  test <- test[test$Pedagogy=='M',]
+  test$target <- as.numeric(test[[brain_par]])
+  test <- test %>% drop_na(target, Age,meanFD,Gender)
+  if (nrow(test) < 5) next
+  ymin <- min(test$target, na.rm = TRUE)
+  ymax <- max(test$target, na.rm = TRUE)
+  k <- 2
+  model <- gam(target ~ s(Age, k=k) + Gender + meanFD, data = test) # + s(ID, bs = "re")
+  nullmodel <- gam(target ~ meanFD + Gender, data = test) # + s(ID, bs = "re")
+  pvalue <- anova.gam(nullmodel, model, test='Chisq')$`Pr(>Chi)`[2]
+  sse.model <- sum((model$y - model$fitted.values)^2)
+  sse.nullmodel <- sum((nullmodel$y - nullmodel$fitted.values)^2)
+  partialRsq <- (sse.nullmodel - sse.model)/sse.nullmodel
+  results_table <- rbind(results_table, data.frame(
+    BrainNetwork = brain_par,
+    EDF = partialRsq,
+    p_value = pvalue
+    ))
+  pred <- predict(model, se.fit = TRUE)
+  model <- gam(target ~ s(Age, k=k), data = test)
+  pred <- predict(model, se.fit = TRUE)
+  test$lower_ci <- pred$fit - 1.96 * pred$se.fit
+  test$upper_ci <- pred$fit + 1.96 * pred$se.fit
+  test$prediction <- pred$fit
+  p <- ggplot(data = test, aes(x = Age, y = prediction)) + 
+    geom_point(aes(y = target), color = "gray", size = 0.8) +
+    geom_smooth(method = "gam", formula = y ~ s(x, k=k), se = TRUE, alpha = 0.8, level = 0.999, color="gray") +
+    geom_ribbon(aes(ymin = lower_ci, ymax = upper_ci), alpha = 1, fill = 'gray')  +
+    labs(title = brain_par, x = "Age", y = "Target") + ylim(-0.2,0.4) + xlim(4.8, 12) +
+    theme(
+      plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+      axis.title = element_text(size = 10),
+      axis.text = element_text(size = 10),
+      legend.position = 'none'
+    )
+  plot_list[[brain_par]] <- p
+  i <- i+1
+}
+# Arrange plots: you can tweak ncol/nrow depending on number of brainnetworks
+combined_plot <- wrap_plots(plot_list, ncol = 3)
+# Save with enough resolution and size for readability
+ggsave("all_brain_plots_bcp.eps", plot = combined_plot, width = 10, height = 7.2, dpi = 300)
+results_table$p_adj_bonferroni <- p.adjust(results_table$p_value, method = "bonferroni")
+results_table$p_adj_fdr <- p.adjust(results_table$p_value, method = "fdr")
+# Save as CSV
+write.csv(results_table, "CBPD_brain_age_effect_results.csv", row.names = FALSE)
+```
+
