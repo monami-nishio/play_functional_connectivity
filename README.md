@@ -1,4 +1,4 @@
-# Developmental links between pretend play and brain network integration
+# Developmental links between play behavior and brain network integration
 
 ## About
 This repository contains the code and data supporting the study *"Developmental links between play behavior and brain network integration"* submitted on *BioArxiv*.
